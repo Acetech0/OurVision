@@ -12,7 +12,10 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Bitmap;
 import android.media.Image;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.os.Bundle;
 import android.widget.Toast;
 
@@ -31,7 +34,8 @@ public class MainActivity extends AppCompatActivity {
     private PreviewView previewView;
     private OverlayView overlayView;
     private ExecutorService cameraExecutor;
-    private ObjectDetector objectDetector;
+    private Yolov8TFLiteDetector yolov8;
+    private TextToSpeech tts;
     private static final int CAMERA_PERMISSION_CODE = 100;
 
     @Override
@@ -42,14 +46,35 @@ public class MainActivity extends AppCompatActivity {
         previewView = findViewById(R.id.previewView);
         overlayView = findViewById(R.id.overlay);
         cameraExecutor = Executors.newSingleThreadExecutor();
+        // initialize YOLOv8 detector (model and labels must be placed into assets)
+        try {
+            String[] labels = loadLabelsFromAssets("labels.txt");
+            yolov8 = new Yolov8TFLiteDetector(getAssets(), "model.tflite", labels, 640);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
-        ObjectDetectorOptions options = new ObjectDetectorOptions.Builder()
-                .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
-                .enableMultipleObjects()
-                .enableClassification()
-                .build();
+    }
 
-        objectDetector = ObjectDetection.getClient(options);
+    private String[] loadLabelsFromAssets(String path) {
+        try (java.io.InputStream is = getAssets().open(path);
+             java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(is))) {
+            List<String> lines = new ArrayList<>();
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) lines.add(line);
+            }
+            return lines.toArray(new String[0]);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return new String[]{"object"};
+        }
+
+        // initialize TTS
+        tts = new TextToSpeech(this, status -> {
+            // no-op
+        });
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -80,33 +105,34 @@ public class MainActivity extends AppCompatActivity {
 
                 // 3️⃣ Set the Analyzer → THIS IS THE BLOCK YOU ASKED ABOUT
                 imageAnalysis.setAnalyzer(cameraExecutor, imageProxy -> {
-                    Image mediaImage = imageProxy.getImage();
-                    if (mediaImage != null) {
-                        InputImage inputImage = InputImage.fromMediaImage(
-                                mediaImage, imageProxy.getImageInfo().getRotationDegrees());
-
-                        objectDetector.process(inputImage)
-                                .addOnSuccessListener(detectedObjects -> {
+                        // we'll capture a bitmap from the PreviewView on the UI thread and run detection on background
+                        runOnUiThread(() -> {
+                            Bitmap bmp = previewView.getBitmap();
+                            if (bmp != null && yolov8 != null) {
+                                cameraExecutor.execute(() -> {
+                                    List<Yolov8TFLiteDetector.Detection> dets = yolov8.detect(bmp);
                                     List<RectF> rects = new ArrayList<>();
-                                    float scaleX = overlayView.getWidth() / (float) mediaImage.getWidth();
-                                    float scaleY = overlayView.getHeight() / (float) mediaImage.getHeight();
-
-                                    for (DetectedObject obj : detectedObjects) {
-                                        Rect box = obj.getBoundingBox();
-                                        rects.add(new RectF(
-                                                box.left * scaleX,
-                                                box.top * scaleY,
-                                                box.right * scaleX,
-                                                box.bottom * scaleY
-                                        ));
+                                    float scaleX = overlayView.getWidth() / (float) bmp.getWidth();
+                                    float scaleY = overlayView.getHeight() / (float) bmp.getHeight();
+                                    for (Yolov8TFLiteDetector.Detection d : dets) {
+                                        RectF r = d.rect;
+                                        rects.add(new RectF(r.left * scaleX, r.top * scaleY, r.right * scaleX, r.bottom * scaleY));
                                     }
-                                    runOnUiThread(() -> overlayView.setBoxes(rects));
-                                })
-                                .addOnFailureListener(Throwable::printStackTrace)
-                                .addOnCompleteListener(task -> imageProxy.close());
-                    } else {
-                        imageProxy.close();
-                    }
+                                    runOnUiThread(() -> {
+                                        overlayView.setBoxes(rects);
+                                        if (!dets.isEmpty()) {
+                                            // speak top detection
+                                            Yolov8TFLiteDetector.Detection best = dets.get(0);
+                                            String speak = best.label + " " + Math.round(best.confidence * 100) + " percent";
+                                            tts.speak(speak, TextToSpeech.QUEUE_FLUSH, null, "det");
+                                        }
+                                    });
+                                    imageProxy.close();
+                                });
+                            } else {
+                                imageProxy.close();
+                            }
+                        });
                 });
 
                 // 4️⃣ Bind to lifecycle

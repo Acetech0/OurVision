@@ -42,6 +42,10 @@ dependencies {
     // ML Kit Object Detection
     implementation("com.google.mlkit:object-detection:17.0.2")
 
+    // TensorFlow Lite for running YOLOv8 (model must be converted to TFLite and placed in assets)
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.3")
+
     // UI and AndroidX
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
