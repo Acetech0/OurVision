@@ -54,6 +54,19 @@ public class MainActivity extends AppCompatActivity {
             e.printStackTrace();
         }
 
+        // initialize TTS
+        tts = new TextToSpeech(this, status -> {
+            // no-op
+        });
+
+        // check camera permission
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED) {
+            startCamera();
+        } else {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_CODE);
+        }
     }
 
     private String[] loadLabelsFromAssets(String path) {
@@ -69,19 +82,6 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             e.printStackTrace();
             return new String[]{"object"};
-        }
-
-        // initialize TTS
-        tts = new TextToSpeech(this, status -> {
-            // no-op
-        });
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED) {
-            startCamera();
-        } else {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_CODE);
         }
     }
 
