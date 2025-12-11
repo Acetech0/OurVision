@@ -10,19 +10,13 @@ import androidx.core.content.ContextCompat;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Bitmap;
-import android.media.Image;
 import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
 import android.os.Bundle;
 import android.widget.Toast;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.objects.*;
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions;
 
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -46,6 +40,7 @@ public class MainActivity extends AppCompatActivity {
         previewView = findViewById(R.id.previewView);
         overlayView = findViewById(R.id.overlay);
         cameraExecutor = Executors.newSingleThreadExecutor();
+
         // initialize YOLOv8 detector (model and labels must be placed into assets)
         try {
             String[] labels = loadLabelsFromAssets("labels.txt");
@@ -93,49 +88,43 @@ public class MainActivity extends AppCompatActivity {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
 
-                // 1️⃣ Create Preview
                 Preview preview = new Preview.Builder().build();
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-                // 2️⃣ Create ImageAnalysis
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build();
 
-                // 3️⃣ Set the Analyzer → THIS IS THE BLOCK YOU ASKED ABOUT
                 imageAnalysis.setAnalyzer(cameraExecutor, imageProxy -> {
-                        // we'll capture a bitmap from the PreviewView on the UI thread and run detection on background
-                        runOnUiThread(() -> {
-                            Bitmap bmp = previewView.getBitmap();
-                            if (bmp != null && yolov8 != null) {
-                                cameraExecutor.execute(() -> {
-                                    List<Yolov8TFLiteDetector.Detection> dets = yolov8.detect(bmp);
-                                    List<RectF> rects = new ArrayList<>();
-                                    float scaleX = overlayView.getWidth() / (float) bmp.getWidth();
-                                    float scaleY = overlayView.getHeight() / (float) bmp.getHeight();
-                                    for (Yolov8TFLiteDetector.Detection d : dets) {
-                                        RectF r = d.rect;
-                                        rects.add(new RectF(r.left * scaleX, r.top * scaleY, r.right * scaleX, r.bottom * scaleY));
+                    runOnUiThread(() -> {
+                        Bitmap bmp = previewView.getBitmap();
+                        if (bmp != null && yolov8 != null) {
+                            cameraExecutor.execute(() -> {
+                                List<Yolov8TFLiteDetector.Detection> dets = yolov8.detect(bmp);
+                                List<RectF> rects = new ArrayList<>();
+                                float scaleX = overlayView.getWidth() / (float) bmp.getWidth();
+                                float scaleY = overlayView.getHeight() / (float) bmp.getHeight();
+                                for (Yolov8TFLiteDetector.Detection d : dets) {
+                                    RectF r = d.rect;
+                                    rects.add(new RectF(r.left * scaleX, r.top * scaleY, r.right * scaleX, r.bottom * scaleY));
+                                }
+                                runOnUiThread(() -> {
+                                    overlayView.setBoxes(rects);
+                                    if (!dets.isEmpty()) {
+                                        Yolov8TFLiteDetector.Detection best = dets.get(0);
+                                        String speak = best.label + " " + Math.round(best.confidence * 100) + " percent";
+                                        tts.speak(speak, TextToSpeech.QUEUE_FLUSH, null, "det");
                                     }
-                                    runOnUiThread(() -> {
-                                        overlayView.setBoxes(rects);
-                                        if (!dets.isEmpty()) {
-                                            // speak top detection
-                                            Yolov8TFLiteDetector.Detection best = dets.get(0);
-                                            String speak = best.label + " " + Math.round(best.confidence * 100) + " percent";
-                                            tts.speak(speak, TextToSpeech.QUEUE_FLUSH, null, "det");
-                                        }
-                                    });
-                                    imageProxy.close();
                                 });
-                            } else {
                                 imageProxy.close();
-                            }
-                        });
+                            });
+                        } else {
+                            imageProxy.close();
+                        }
+                    });
                 });
 
-                // 4️⃣ Bind to lifecycle
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
 
